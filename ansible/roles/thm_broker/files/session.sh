@@ -8,7 +8,12 @@ set -u
 
 TARGET="${1:?target ip required}"
 
+# Override if you fork this repo and want your own tmux.conf served instead.
+ATTACKBOX_TMUX_URL="${ATTACKBOX_TMUX_URL:-https://raw.githubusercontent.com/lhGWTS/ttyd-vpn-ssh-broker/main/attackbox/tmux.conf}"
+
 printf '[broker] paste the target root password when prompted.\r\n\r\n'
+printf '[broker] once connected, for a nicer tmux setup (needs AttackBox internet egress):\r\n'
+printf '[broker]   curl -fsSL %s -o ~/.tmux.conf && tmux new -s main\r\n\r\n' "$ATTACKBOX_TMUX_URL"
 
 # Sandbox notes:
 #  * No --unshare-pid: nesting inside an unprivileged Incus container forbids
