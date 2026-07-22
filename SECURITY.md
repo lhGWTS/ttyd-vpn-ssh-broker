@@ -25,6 +25,15 @@ This broker assumes:
 - ttyd itself ships with no authentication of its own; it must sit behind an
   authenticating reverse proxy (or the firewall rule / `TTYD_CRED` fallback
   needs to be used instead) before it's reachable from anywhere untrusted.
+- **ssh's client-side escape sequences are disabled** (`-e none` in
+  `session.sh`). Without it, the browser user's raw keystrokes reach ssh's
+  controlling tty directly (no `setsid` in between), so `~`-prefixed escapes
+  would be live — notably `~C`, which can add a `-D`/`-L`/`-R` port forward at
+  runtime. Since bwrap runs with `--share-net`, such a forward would reach
+  anything on the shared network namespace, not just the one `broker.sh`-
+  validated target. OpenSSH 9.2+ already disables `~C` by default, but that's
+  an upstream default this project shouldn't rely on staying true, so it's
+  disabled explicitly.
 
 ## Known limitations
 

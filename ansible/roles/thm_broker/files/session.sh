@@ -24,6 +24,15 @@ printf '[broker]   curl -fsSL %s -o ~/.tmux.conf && tmux new -s main\r\n\r\n' "$
 #    and each tmux pane is its own pty, so the risk is minimal.
 #  * --share-net: the VPN tunnel lives in the shared network namespace.
 #  * /root and every credential are simply never bound in -> unreadable.
+#  * -e none: disables ssh's client-side "~" escape sequences entirely. Since
+#    we never setsid, the browser user's keystrokes reach ssh's controlling
+#    tty directly, so escapes are otherwise live. OpenSSH 9.2+ already
+#    disables ~C (the one that can add -D/-L/-R forwards at runtime) by
+#    default, which matters here because --share-net means any such forward
+#    would reach far beyond the one broker.sh-validated $TARGET -- but that's
+#    an upstream default we shouldn't depend on staying that way. No escape
+#    sequence has a legitimate use in this broker, so turn off the whole
+#    class rather than rely on -C alone being off.
 exec bwrap \
   --unshare-user --unshare-ipc --unshare-uts --unshare-cgroup \
   --ro-bind /usr /usr \
@@ -45,6 +54,7 @@ exec bwrap \
   --share-net \
   --die-with-parent \
   -- ssh \
+       -e none \
        -o StrictHostKeyChecking=no \
        -o UserKnownHostsFile=/dev/null \
        -o GlobalKnownHostsFile=/dev/null \
