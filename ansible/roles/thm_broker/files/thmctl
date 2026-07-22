@@ -6,6 +6,7 @@
 #   thmctl restart      stop then start
 #   thmctl status       show what is running
 #   thmctl vpn-start|vpn-stop|web-start|web-stop   individual pieces
+#   thmctl reset <ip>   kill the tmux session for one target (no reopen)
 #
 # Only the VPN runs as root. ttyd drops to the ephemeral uid (-u/-g) before it
 # spawns broker.sh, so the whole web/ssh path is unprivileged.
@@ -86,6 +87,29 @@ web_stop() {
      "tmux -f /opt/thm/tmux.conf kill-server 2>/dev/null" || true
 }
 
+reset_session() {
+  ip="${1:?usage: thmctl reset <ip>}"
+  # Reject anything but digits/dots up front: guarantees $sess below can only
+  # ever contain [0-9_], so it's always safe to interpolate directly into the
+  # su -c string with no quoting ambiguity. (Passing it as a `su ... -- arg`
+  # positional instead was tried first and was the root cause of an incident
+  # where it silently became empty inside -c and killed the whole tmux
+  # server instead of one session -- do not go back to that pattern.)
+  case "$ip" in
+    *[!0-9.]*|"") echo "[web] not an IP-like argument: $ip" >&2; return 1 ;;
+  esac
+  sess="thm_$(printf '%s' "$ip" | tr . _)"
+  eph_user="$(id -nu "$EPH_UID" 2>/dev/null || echo ephemeral)"
+  # Kill-only, deliberately -- unlike the browser-facing "reset" in broker.sh,
+  # an operator clearing a session from the CLI shouldn't get a new ssh
+  # connection auto-spawned on their behalf.
+  if su "$eph_user" -s /bin/sh -c "tmux -f /opt/thm/tmux.conf kill-session -t '$sess'" 2>/dev/null; then
+    echo "[web] killed session $sess"
+  else
+    echo "[web] no such session: $sess (nothing to do)"
+  fi
+}
+
 status() {
   if is_running "$VPN_PID"; then echo "[vpn] running (pid $(cat "$VPN_PID"))"; else echo "[vpn] stopped"; fi
   if ip link show tun0 >/dev/null 2>&1; then ip -4 -brief addr show tun0; else echo "[vpn] tun0 absent"; fi
@@ -104,5 +128,6 @@ case "${1:-}" in
   web-start) need_root; web_start ;;
   web-stop)  need_root; web_stop ;;
   status)    status ;;
-  *) echo "usage: $0 {start|stop|restart|status|vpn-start|vpn-stop|web-start|web-stop}" >&2; exit 1 ;;
+  reset)     need_root; reset_session "${2:-}" ;;
+  *) echo "usage: $0 {start|stop|restart|status|vpn-start|vpn-stop|web-start|web-stop|reset <ip>}" >&2; exit 1 ;;
 esac

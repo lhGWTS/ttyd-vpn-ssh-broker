@@ -65,9 +65,11 @@ actual workaround).
 - **Credential isolation**: bubblewrap never binds in `/root`, so even a
   compromised ssh session inside the sandbox can't read the VPN credentials.
 - **Strict input validation**: `broker.sh` only accepts dotted-quad RFC1918
-  addresses (10/8, 172.16/12, 192.168/16); shell metacharacters, extra
-  arguments, and `-oProxyCommand=`-style ssh option injection are all
-  rejected.
+  addresses (10/8, 172.16/12, 192.168/16); shell metacharacters and
+  `-oProxyCommand=`-style ssh option injection are all rejected. The only
+  argument accepted beyond the destination IP is the literal `reset` keyword
+  used by the session-reset feature (see `ARCHITECTURE.md`); anything else is
+  rejected exactly like a malformed IP.
 - **tmux is hardened deny-by-default**: tmux runs *outside* the bwrap sandbox,
   so a reachable `C-b :` command prompt would mean arbitrary `run-shell` —
   i.e. a sandbox escape. The shipped `tmux.conf` unbinds everything and

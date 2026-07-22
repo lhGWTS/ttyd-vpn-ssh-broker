@@ -24,8 +24,14 @@ SESSION_CMD=/opt/thm/session.sh
 die() { printf '\r\n\033[1;31m[broker] %s\033[0m\r\n' "$*"; sleep 4; exit 1; }
 
 # --- validate the destination ------------------------------------------------
-[ "$#" -eq 1 ] || die "expected exactly one destination (got $# arguments)"
+[ "$#" -eq 1 ] || [ "$#" -eq 2 ] \
+  || die "expected one or two arguments: <ip> [reset] (got $# arguments)"
 TARGET="$1"
+# Captured here, before `set -- $TARGET` below reassigns $1.. to split octets
+# -- grabbing it any later would silently lose this.
+ACTION="${2:-}"
+[ -z "$ACTION" ] || [ "$ACTION" = "reset" ] \
+  || die "unexpected second argument (only the literal 'reset' is accepted): $ACTION"
 
 echo "$TARGET" | grep -Eq '^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$' \
   || die "not an IPv4 address: $TARGET"
@@ -48,6 +54,20 @@ ip link show tun0 >/dev/null 2>&1 \
 # --- persistent tmux session, one per target ---------------------------------
 # Session name is derived from the (already strictly validated) IP.
 SESS="thm_$(printf '%s' "$TARGET" | tr . _)"
+
+# Optional self-service reset: kill any existing session for this target, then
+# fall through into the normal attach-or-create logic below unchanged, which
+# will find no session and open a fresh one. Independent of ssh's -e none in
+# session.sh -- this is a tmux-layer action gated on the exact-match ACTION
+# check above, not a reopened ssh escape sequence.
+if [ "$ACTION" = "reset" ]; then
+  if tmux -f "$TMUX_CONF" has-session -t "$SESS" 2>/dev/null; then
+    tmux -f "$TMUX_CONF" kill-session -t "$SESS" 2>/dev/null
+    printf '\033[1;33m[broker] existing session for %s cleared.\033[0m\r\n' "$TARGET"
+  else
+    printf '\033[1;33m[broker] no existing session for %s to clear.\033[0m\r\n' "$TARGET"
+  fi
+fi
 
 if tmux -f "$TMUX_CONF" has-session -t "$SESS" 2>/dev/null; then
   # Existing live session: re-attach, detaching any stale/other client (-d) so
