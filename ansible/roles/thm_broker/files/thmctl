@@ -1,0 +1,108 @@
+#!/bin/sh
+# thmctl - manage the THM AttackBox ttyd broker inside this container.
+#
+#   thmctl start        bring up the VPN (root) and the ttyd web tier (ephemeral)
+#   thmctl stop         stop both
+#   thmctl restart      stop then start
+#   thmctl status       show what is running
+#   thmctl vpn-start|vpn-stop|web-start|web-stop   individual pieces
+#
+# Only the VPN runs as root. ttyd drops to the ephemeral uid (-u/-g) before it
+# spawns broker.sh, so the whole web/ssh path is unprivileged.
+set -u
+
+# Optional overrides (TTYD_CRED etc.) live here; keep it root-only (chmod 600).
+[ -f /opt/thm/thmctl.env ] && . /opt/thm/thmctl.env
+
+THM_DIR="${THM_DIR:-/opt/thm}"
+OVPN="${OVPN:-/root/thm.ovpn}"
+EPH_UID="${EPH_UID:-1000}"
+EPH_GID="${EPH_GID:-1000}"
+TTYD_PORT="${TTYD_PORT:-7681}"
+TTYD_BIND="${TTYD_BIND:-0.0.0.0}"   # reachable from the Caddy container over incusbr0
+TTYD_BASE="${TTYD_BASE:-/tty}"      # must match the reverse_proxy path in the Caddyfile
+TTYD_CLIENTS="${TTYD_CLIENTS:-3}"
+TTYD_CRED="${TTYD_CRED:-}"          # user:pass for ttyd basic auth (defense-in-depth
+                                    # behind Caddy on the shared bridge). Empty = off.
+
+VPN_PID=/run/thm-openvpn.pid
+VPN_LOG=/var/log/thm-openvpn.log
+TTYD_PID=/run/thm-ttyd.pid
+TTYD_LOG=/var/log/thm-ttyd.log
+
+is_running() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
+
+need_root() { [ "$(id -u)" -eq 0 ] || { echo "must run as root" >&2; exit 1; }; }
+
+vpn_start() {
+  is_running "$VPN_PID" && { echo "[vpn] already running (pid $(cat "$VPN_PID"))"; return 0; }
+  [ -f "$OVPN" ] || { echo "[vpn] config not found: $OVPN" >&2; return 1; }
+  echo "[vpn] starting openvpn (--disable-dco)..."
+  openvpn --disable-dco --config "$OVPN" --daemon \
+          --writepid "$VPN_PID" --log "$VPN_LOG" || { echo "[vpn] openvpn failed to launch" >&2; return 1; }
+  i=0
+  while [ "$i" -lt 25 ]; do
+    if ip link show tun0 >/dev/null 2>&1; then
+      echo "[vpn] tun0 is up:"; ip -4 -brief addr show tun0; return 0
+    fi
+    i=$((i + 1)); sleep 1
+  done
+  echo "[vpn] WARNING: tun0 not up after 25s. Last log lines:"; tail -n 15 "$VPN_LOG" 2>/dev/null
+  return 1
+}
+
+vpn_stop() {
+  if is_running "$VPN_PID"; then kill "$(cat "$VPN_PID")" 2>/dev/null; echo "[vpn] stopped"; else echo "[vpn] not running"; fi
+  rm -f "$VPN_PID"
+}
+
+web_start() {
+  is_running "$TTYD_PID" && { echo "[web] ttyd already running (pid $(cat "$TTYD_PID"))"; return 0; }
+  [ -x "$THM_DIR/broker.sh" ] || { echo "[web] $THM_DIR/broker.sh missing/not executable" >&2; return 1; }
+  echo "[web] starting ttyd on $TTYD_BIND:$TTYD_PORT (dropping to uid $EPH_UID)..."
+  [ -n "$TTYD_CRED" ] && { set -- -c "$TTYD_CRED"; echo "[web] ttyd basic auth: ON"; } || set --
+  # -W writable, -a pass ?arg to the command, -u/-g drop privileges,
+  # -m limit concurrent clients, -P keepalive ping, -c optional basic auth.
+  setsid ttyd \
+      -i "$TTYD_BIND" -p "$TTYD_PORT" -b "$TTYD_BASE" \
+      -u "$EPH_UID" -g "$EPH_GID" \
+      -W -a -m "$TTYD_CLIENTS" -P 30 "$@" \
+      -t titleFixed="THM AttackBox" -t disableLeaveAlert=true \
+      "$THM_DIR/broker.sh" >"$TTYD_LOG" 2>&1 &
+  echo $! > "$TTYD_PID"
+  sleep 1
+  if is_running "$TTYD_PID"; then
+    echo "[web] ttyd running (pid $(cat "$TTYD_PID"))"
+  else
+    echo "[web] ttyd failed to start. Last log lines:"; tail -n 15 "$TTYD_LOG" 2>/dev/null; return 1
+  fi
+}
+
+web_stop() {
+  if is_running "$TTYD_PID"; then kill "$(cat "$TTYD_PID")" 2>/dev/null; echo "[web] stopped"; else echo "[web] not running"; fi
+  rm -f "$TTYD_PID"
+  # Also stop the ephemeral user's tmux server to prevent leftover zombie processes
+  su "$(id -nu "$EPH_UID" 2>/dev/null || echo ephemeral)" -s /bin/sh -c \
+     "tmux -f /opt/thm/tmux.conf kill-server 2>/dev/null" || true
+}
+
+status() {
+  if is_running "$VPN_PID"; then echo "[vpn] running (pid $(cat "$VPN_PID"))"; else echo "[vpn] stopped"; fi
+  if ip link show tun0 >/dev/null 2>&1; then ip -4 -brief addr show tun0; else echo "[vpn] tun0 absent"; fi
+  if is_running "$TTYD_PID"; then echo "[web] ttyd running (pid $(cat "$TTYD_PID")) on $TTYD_BIND:$TTYD_PORT$TTYD_BASE"; else echo "[web] stopped"; fi
+  echo "[web] live tmux sessions:"
+  su "$(id -nu "$EPH_UID" 2>/dev/null || echo ephemeral)" -s /bin/sh -c \
+     "tmux -f /opt/thm/tmux.conf list-sessions 2>/dev/null" | sed 's/^/       /' || echo "       (none)"
+}
+
+case "${1:-}" in
+  start)     need_root; vpn_start; web_start ;;
+  stop)      need_root; web_stop; vpn_stop ;;
+  restart)   need_root; web_stop; vpn_stop; sleep 1; vpn_start; web_start ;;
+  vpn-start) need_root; vpn_start ;;
+  vpn-stop)  need_root; vpn_stop ;;
+  web-start) need_root; web_start ;;
+  web-stop)  need_root; web_stop ;;
+  status)    status ;;
+  *) echo "usage: $0 {start|stop|restart|status|vpn-start|vpn-stop|web-start|web-stop}" >&2; exit 1 ;;
+esac

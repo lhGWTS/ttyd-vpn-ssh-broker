@@ -1,0 +1,161 @@
+---
+# Rebuild the THM AttackBox ttyd broker on a fresh Alpine container.
+# Ordering mirrors the hand-built prod box: packages -> user -> /opt/thm scripts
+# -> VPN config -> OpenRC service -> firewall -> hidepid hardening.
+
+# --- runtime packages ---------------------------------------------------------
+- name: Install runtime packages
+  community.general.apk:
+    name: "{{ thm_packages }}"
+    state: present
+    update_cache: true
+
+# --- unprivileged web user ----------------------------------------------------
+- name: Create ephemeral group
+  ansible.builtin.group:
+    name: "{{ thm_eph_user }}"
+    gid: "{{ thm_eph_gid }}"
+
+- name: Create ephemeral user
+  ansible.builtin.user:
+    name: "{{ thm_eph_user }}"
+    uid: "{{ thm_eph_uid }}"
+    group: "{{ thm_eph_user }}"
+    home: "{{ thm_eph_home }}"
+    shell: "{{ thm_eph_shell }}"
+    create_home: true
+
+# --- /opt/thm broker scripts --------------------------------------------------
+- name: Create /opt/thm
+  ansible.builtin.file:
+    path: "{{ thm_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install broker scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ thm_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - thmctl
+    - broker.sh
+    - session.sh
+    - firewall.sh
+  notify: restart thm broker
+
+- name: Install tmux.conf
+  ansible.builtin.copy:
+    src: tmux.conf
+    dest: "{{ thm_dir }}/tmux.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  # A tmux.conf change only takes effect on a fresh tmux server; the restart
+  # handler does not recycle it, so reload by hand if you change this later:
+  #   su ephemeral -c "tmux -f /opt/thm/tmux.conf kill-server"
+
+- name: Symlink thmctl into PATH
+  ansible.builtin.file:
+    src: "{{ thm_dir }}/thmctl"
+    dest: "{{ thm_bin_symlink }}"
+    state: link
+
+# --- Caddy reference copies (for the separate Caddy container) ----------------
+- name: Create /opt/thm/caddy
+  ansible.builtin.file:
+    path: "{{ thm_dir }}/caddy"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Caddy reference files
+  ansible.builtin.copy:
+    src: "caddy/{{ item }}"
+    dest: "{{ thm_dir }}/caddy/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - form.html
+    - Caddyfile.snippet
+
+# --- VPN config (secret, optional) -------------------------------------------
+- name: Install THM VPN config
+  ansible.builtin.copy:
+    src: "{{ thm_ovpn_src }}"
+    dest: "{{ thm_ovpn_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: thm_ovpn_src | length > 0
+  notify: restart thm broker
+
+- name: Warn if no VPN config was supplied
+  ansible.builtin.debug:
+    msg: >-
+      thm_ovpn_src is empty: drop a valid .ovpn at {{ thm_ovpn_path }} (0600,
+      root) before the broker can reach any target. The web tier still starts.
+  when: thm_ovpn_src | length == 0
+
+# --- OpenRC service -----------------------------------------------------------
+- name: Install thm OpenRC service
+  ansible.builtin.copy:
+    src: thm.initd
+    dest: /etc/init.d/thm
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Enable thm at boot
+  ansible.builtin.service:
+    name: thm
+    enabled: true
+
+# sshd is the ONLY channel into this container; if it isn't in a runlevel a
+# reboot locks you out and recovery needs the Incus host. Keep it enabled.
+- name: Enable sshd at boot
+  ansible.builtin.service:
+    name: sshd
+    enabled: true
+
+- name: Enable crond at boot
+  ansible.builtin.service:
+    name: crond
+    enabled: true
+
+# --- firewall: ttyd reachable only from Caddy ---------------------------------
+- name: Enable iptables at boot
+  ansible.builtin.service:
+    name: iptables
+    enabled: true
+
+- name: Apply ttyd source-IP firewall
+  ansible.builtin.command:
+    cmd: "{{ thm_dir }}/firewall.sh"
+  environment:
+    CADDY_IP: "{{ thm_caddy_ip }}"
+    TTYD_PORT: "{{ thm_ttyd_port }}"
+  register: thm_fw
+  changed_when: "'restricted to' in thm_fw.stdout"
+  # Idempotent: firewall.sh rebuilds its dedicated THM_TTYD chain each run.
+
+# --- hidepid=2 on /proc (Alpine `local` service) ------------------------------
+- name: Install hidepid local.d script
+  ansible.builtin.copy:
+    src: hidepid.start
+    dest: /etc/local.d/hidepid.start
+    owner: root
+    group: root
+    mode: "0755"
+  notify: remount /proc hidepid
+
+- name: Enable local service at boot (runs local.d/*.start)
+  ansible.builtin.service:
+    name: local
+    enabled: true

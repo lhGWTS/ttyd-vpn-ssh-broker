@@ -1,0 +1,11 @@
+---
+# Stage 1: rebuild the whole broker. Requires python3 on the target
+# (run bootstrap.yml first, or `make rebuild` which chains them).
+#
+#   ansible-playbook -i inventory.ini site.yml
+#   ansible-playbook -i inventory.ini site.yml --check --diff   # dry run
+- name: Provision the THM AttackBox broker
+  hosts: thm
+  gather_facts: true
+  roles:
+    - thm_broker

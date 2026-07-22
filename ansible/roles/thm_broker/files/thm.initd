@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# OpenRC service for the THM AttackBox broker.
+# Install: cp to /etc/init.d/thm; chmod +x; rc-update add thm default
+name="THM AttackBox broker"
+description="OpenVPN tunnel (root) + ttyd broker (ephemeral)"
+
+depend() {
+	need net
+	after firewall
+}
+
+start() {
+	ebegin "Starting THM broker (VPN + ttyd)"
+	/opt/thm/thmctl start
+	# Don't fail the boot if the VPN creds have expired; the web tier is what
+	# matters and thmctl reports details to its logs.
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping THM broker"
+	/opt/thm/thmctl stop
+	eend 0
+}
+
+status() {
+	/opt/thm/thmctl status
+}

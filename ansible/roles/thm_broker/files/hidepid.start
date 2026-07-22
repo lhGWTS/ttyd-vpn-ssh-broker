@@ -1,0 +1,6 @@
+#!/bin/sh
+# Hide other users' processes from the unprivileged ttyd user (ephemeral).
+# Incus mounts /proc without hidepid, so remount it with hidepid=2: a broken-out
+# ephemeral shell then cannot read root's argv (e.g. the openvpn --config path).
+# Defense-in-depth behind the tmux prefix lockdown in /opt/thm/tmux.conf.
+mount -o remount,hidepid=2 /proc

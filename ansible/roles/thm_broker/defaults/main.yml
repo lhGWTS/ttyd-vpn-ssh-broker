@@ -1,0 +1,57 @@
+---
+# thm_broker role defaults
+# All of these can be overridden in inventory / group_vars / -e.
+
+# --- layout -------------------------------------------------------------------
+thm_dir: /opt/thm
+thm_bin_symlink: /usr/local/bin/thmctl
+
+# --- ephemeral (unprivileged) web user ---------------------------------------
+# ttyd drops to this uid/gid; tmux, bwrap and ssh all run as this user.
+thm_eph_user: ephemeral
+thm_eph_uid: 1000
+thm_eph_gid: 1000
+thm_eph_home: /home/ephemeral
+thm_eph_shell: /bin/sh
+
+# --- ttyd / network -----------------------------------------------------------
+thm_ttyd_port: 7681
+thm_ttyd_bind: 0.0.0.0
+thm_ttyd_base: /tty
+thm_ttyd_clients: 3
+
+# --- VPN ----------------------------------------------------------------------
+# THM .ovpn config with embedded, rotating credentials. This is a SECRET and is
+# NOT shipped in this repo. Point thm_ovpn_src at a copy on the control node to
+# have the role install it, or leave it empty and drop the file in by hand.
+thm_ovpn_path: /root/thm.ovpn
+thm_ovpn_src: ""          # e.g. "~/secrets/thm.ovpn" -- name it however you like
+
+# --- firewall -----------------------------------------------------------------
+# tcp/ttyd is accepted only from the Caddy container; everything else DROPped.
+# 10.0.0.10 is a placeholder -- point this at your own Caddy container's
+# address on whatever bridge/network you deploy on.
+thm_caddy_ip: 10.0.0.10
+
+# --- runtime packages that must exist on thm ---------------------------------
+# apk is assumed to work in the rebuild environment (unlike the current prod box
+# whose CDN egress is blocked). These are the exact package names; pin versions
+# in inventory if you need byte-for-byte parity with the versions listed below.
+#   bubblewrap 0.11.2  tmux 3.6b  libevent 2.1.13
+#   iptables 1.8.13 (+iptables-openrc)  openvpn 2.7.3 (+openvpn-openrc)
+#   ttyd 1.7.7  openssh  sshpass
+thm_packages:
+  - bubblewrap
+  - tmux
+  - libevent
+  - iptables
+  - iptables-openrc
+  - openvpn
+  - openvpn-openrc
+  - ttyd
+  - openssh
+  - sshpass
+
+# python3 is a provisioning-only dependency (Ansible modules need it on the
+# target). The teardown playbook removes it again. Set false to keep it.
+thm_remove_python_after: true

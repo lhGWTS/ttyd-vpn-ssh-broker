@@ -1,0 +1,31 @@
+# --- THM AttackBox broker -----------------------------------------------------
+# Drop this into the Caddyfile on your Caddy container. Caddy handles TLS and the
+# single-operator basic auth; the thm container only exposes ttyd on the bridge.
+#
+# Generate the password hash with:  caddy hash-password
+# Copy form.html to the file_server root (here: /srv/thm/index.html).
+# thm.incus resolves over your bridge network; use its fixed IP instead if
+# you'd rather not depend on container DNS.
+
+thm.example.com {                      # <-- your hostname
+    encode zstd gzip
+
+    basicauth {
+        operator $2a$14$REPLACE_WITH_caddy_hash-password_OUTPUT
+    }
+
+    # ttyd (terminal) is mounted under /tty and runs with `-b /tty` in the
+    # container, so keep the prefix (do NOT use handle_path, which strips it).
+    # Auth is handled by the basicauth block above; ttyd itself is unauthenticated.
+    @tty path /tty /tty/*
+    handle @tty {
+        reverse_proxy thm.incus:7681   # or the container's fixed bridge IP
+        # reverse_proxy auto-upgrades the ttyd websocket; no extra config needed.
+    }
+
+    # Everything else = the destination-entry form.
+    handle {
+        root * /srv/thm
+        file_server
+    }
+}

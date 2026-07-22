@@ -1,0 +1,20 @@
+---
+# Stage 2: remove the provisioning-only python3 again, restoring the minimal
+# attack surface (python must not be reachable from inside the bwrap sandbox,
+# which ro-binds /usr). Run after site.yml has finished.
+#
+# `raw` only, so it still works once python is gone.
+#
+#   ansible-playbook -i inventory.ini teardown.yml
+- name: Remove provisioning python3 from thm
+  hosts: thm
+  gather_facts: false
+  tasks:
+    - name: Remove python3 (and now-orphaned deps)
+      ansible.builtin.raw: >-
+        if apk info -e python3 >/dev/null 2>&1; then
+          apk del python3 && apk cache clean 2>/dev/null; echo REMOVED;
+        else echo ABSENT; fi
+      register: td_py
+      changed_when: "'REMOVED' in td_py.stdout"
+      when: thm_remove_python_after | default(true) | bool

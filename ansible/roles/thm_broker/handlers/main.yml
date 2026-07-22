@@ -1,0 +1,18 @@
+---
+- name: reload iptables from firewall.sh
+  ansible.builtin.command: "{{ thm_dir }}/firewall.sh"
+  environment:
+    CADDY_IP: "{{ thm_caddy_ip }}"
+    TTYD_PORT: "{{ thm_ttyd_port }}"
+  # firewall.sh is idempotent (rebuilds its own THM_TTYD chain), so re-running is
+  # safe. It also does `rc-service iptables save` + `rc-update add iptables`.
+
+- name: remount /proc hidepid
+  ansible.builtin.command: /etc/local.d/hidepid.start
+  # Safe to re-run: it's a plain `mount -o remount,hidepid=2 /proc`.
+
+- name: restart thm broker
+  ansible.builtin.service:
+    name: thm
+    state: restarted
+  # Kicks thmctl restart (VPN + ttyd). Won't fail boot on expired VPN creds.
