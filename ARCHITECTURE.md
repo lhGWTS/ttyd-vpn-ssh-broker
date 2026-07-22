@@ -129,13 +129,20 @@ thmctl vpn-start | vpn-stop | web-start | web-stop   # 個別制御
 
 ---
 
-## 6. 環境の制約と回避策
+## 6. 環境の制約と回避策(解消済み・記録として残す)
 
-- **CDN egress が遮断**されており(親ホスト/Incusのegressポリシー)、thm から
-  `apk update`/`apk add` は timeout する。TCPハンドシェイクやDNSは通るが持続HTTP転送が止まる。
-- **回避策(実績あり)**: このホスト(`debian`)は CDN に到達できるので、`.apk` を
-  ここで `curl` 取得 → `scp` → `apk add ./*.apk`。この方式で **bubblewrap** と
-  **tmux(+libevent)** をインストール済み。
+- 構築初期には **CDN egress が遮断**されており(親ホスト/Incusのegressポリシー)、
+  thm から `apk update`/`apk add` は timeout していた。TCPハンドシェイクやDNSは
+  通るが持続HTTP転送が止まる、という症状。
+- 当時の回避策: 別ホスト(CDNに到達できる制御ノード)で `.apk` を `curl` 取得 →
+  `scp` で thm へ転送 → `apk add ./*.apk`。この方式で **bubblewrap** と
+  **tmux(+libevent)** をインストールした。
+- **2026-07-22 時点で CDN egress は復旧しており、thm から直接
+  `apk update`/`apk add` が通ることを確認済み**。したがって上記の回避策は
+  現在は不要 — 通常どおり `apk add <package>` で足りる。Ansibleロール
+  (`thm_packages`)もこの前提(通常のapk到達性)で最初から設計されているため、
+  変更は不要。egressポリシーが環境によって変わる可能性は残るので、同じ症状
+  (TCP/DNSは通るがHTTP転送だけ止まる)に遭遇した場合の参考として本節は残す。
 - 参考: 非特権ユーザー名前空間は動作する(bubblewrap が setuid 無しで隔離可能)。
 
 ---
